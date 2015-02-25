@@ -1,0 +1,104 @@
+---
+title: "Model predictions for logistic regressions"
+author: "oriana"
+date: "February 17, 2015"
+output:
+  html_document:
+    highlight: haddock
+    theme: cerulean
+---
+
+This is document will demonstrate how to calculate and plot the predictions of a mixed-effects logistic regression. This based largely on Ben Bolker's Owls data example [[pdf]](http://glmm.wdfiles.com/local--files/examples/Owls.pdf), & help from [Morgan Sonderegger](people.linguistics.mcgill.ca/~morgan/). This document also greatly benefitted from the R Markdown Reference Guide [[pdf]](http://rmarkdown.rstudio.com/RMarkdownReferenceGuide.pdf).
+
+First, we have to load the following libraries:
+```{r message=FALSE,error=FALSE,warning=FALSE}
+library(languageR)
+library(lme4)
+library(lmerTest)
+library(optimx)
+library(arm)
+library(ggplot2)
+```
+
+* `languageR` contains the freely available data set we'll be using,
+* `lme4` is what we need to fit the model,
+* `ggplot2` for making nice plots. (Useful ggplot2 reference: [Cookbook for R](http://www.cookbook-r.com/Graphs/))
+
+### Fitting a model
+
+Let's fit a model with the following information:
+
+* `CaseMarking` as the dependent variable: `1` corresponds to ergative marking, `0` to other (this is modified from the original data set) 
+* Random effects:
+	+ `Text`
+	+ `Speaker`
+* Fixed Effects:
+	+ `WordOrder`
+	+ `AgeGroup`
+	+ `AnimacyOfSubject`
+
+```{r echo=FALSE,message=FALSE}
+warlpiri$CaseMarking <- factor(warlpiri$CaseMarking,levels=c('other','ergative'))
+````
+
+```{r cache=TRUE}
+warlpiri.lmer = glmer(CaseMarking ~ WordOrder + AgeGroup +
+                        AnimacyOfSubject + (1|Text) + (1|Speaker),
+                      control=glmerControl(optimizer="optimx",optCtrl=list(method="nlminb")),
+                      family = "binomial", data = warlpiri)
+
+summary(warlpiri.lmer)
+
+
+```
+
+
+### Getting the predictions
+
+Set up the frame that gives you all possible combinations of values. 
+
+```{r}
+pframe0 <- with(warlpiri, expand.grid(WordOrder=levels(WordOrder),AgeGroup=levels(AgeGroup),AnimacyOfSubject=levels(AnimacyOfSubject)))
+
+pframe0
+```
+
+Now `pframe0` contains all possible values for a given observation. 
+
+*(How do you do this if there's an interaction in your model?)*
+
+And from that, you can get a matrix with all the different possible values that a given observation might have. 
+```{r}
+mm <- model.matrix(~WordOrder+AgeGroup+AnimacyOfSubject,data=pframe0)
+
+pframe1 <- data.frame(pframe0,eta=mm%*%fixef(warlpiri.lmer))
+pframe1 <- with(pframe1,data.frame(pframe1,CaseMarking=invlogit(eta)))
+
+pframe1$pse <- diag(mm %*% tcrossprod(vcov(warlpiri.lmer), mm))
+```
+Which makes these the bounds of the 95% confidence interval for the average word/speaker prediction, in log-odds. 
+```{r}
+pframe1$hi <- with(pframe1, eta + 1.96*pse)
+pframe1$low <- with(pframe1, eta - 1.96*pse)
+```
+
+Translate these numbers to probablity using the `invlogit()` function. 
+
+```{r}
+pframe1$hi.prob <- invlogit(pframe1$hi)
+pframe1$low.prob <- invlogit(pframe1$low)
+```
+
+Now you can make a nice plot of your predicted probabilities with 95% confidence intervals!
+
+```{r}
+ggplot(aes(x=AgeGroup, ymin=low.prob, ymax=hi.prob,y=CaseMarking), data=pframe1) + geom_errorbar(aes(color=AnimacyOfSubject),width=0.2) + geom_point(aes(color=AnimacyOfSubject)) + coord_cartesian(ylim=c(0, 1)) + facet_wrap(~AnimacyOfSubject+WordOrder) + ggtitle('Predicted probability ')
+```
+
+```{r}
+ggplot(aes(x=AnimacyOfSubject, ymin=low.prob, ymax=hi.prob,y=CaseMarking), data=pframe1) + geom_errorbar(aes(width=0.2,color=AgeGroup))+ coord_cartesian(ylim=c(0, 1)) + ggtitle('Predicted probability ') + facet_grid(~WordOrder)
+```
+
+
+
+
